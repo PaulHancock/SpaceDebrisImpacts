@@ -15,8 +15,25 @@ __date__ = '2019-12-17'
 # Compute the MWA location
 MWA = Topos('26.70331940 S', '116.67081524 E')
 
-def get_sats(kind='stations'):
+def get_sats(kind='stations', key_type='str'):
     """
+    Load a set of satellites
+
+    parameters
+    ----------
+    kind : str
+        The kind of satellites to be loaded. Available is:
+        'stations'
+        'starlink'
+        other - geos
+
+    key_type : str
+        Default is to have numeric and string ids for each satellites (ie two ids each)
+        If key_type=='str' then only use string ids, otherwise use only numeric ids
+
+    returns
+    -------
+    sats : [:class:`skyfield.sgp4lib.EarthSatellite`,...]
     """
     if kind == 'stations':
         url = 'http://www.celestrak.com/NORAD/elements/stations.txt'
@@ -25,7 +42,12 @@ def get_sats(kind='stations'):
     else:
         url = 'http://www.celestrak.com/NORAD/elements/geo.txt'
     satellites = load.tle(url)
-    return satellites
+
+    if key_type =='str':
+        sat = [satellites[n] for n in satellites.keys() if isinstance(n,str)]
+    else:
+        sat = [satellites[n] for n in satellites.keys() if not isinstance(n,str)]
+    return sat
 
 
 def get_time_rage(start=None, duration=3600, step_size=1):
@@ -41,7 +63,7 @@ def get_time_rage(start=None, duration=3600, step_size=1):
                     day=start.day,
                     hour=start.hour,
                     minute=start.minute,
-                    second=seconds)
+                    second=steps)
     return trange
 
 
@@ -90,13 +112,30 @@ def get_rcs_dict(infile='https://www.celestrak.com/pub/satcat.txt'):
 
 def alt_az_dist(grnd, satellite, times):
     """
+    Compute the alt az and distance between ground and satellite at a given set of times
+
+    parameters
+    ----------
+    grnd : :class:`skyfield.api.Topos`
+        The ground station of interest
+
+    satellite : :class:`skyfield.sgp4lib.EarthSatellite`
+        The satellite(s) of interest
+
+    times : :class:`skyfield.timelib.Time`
+        Time(s) of interest
+
+    returns
+    -------
+    alt, az, distance : float
+        Units are degrees, degrees, km
     """
     difference = [s-grnd for s in satellite]
-    alt, az, distance = zip(*[d.at(trange).altaz() for d in difference])
+    alt, az, distance = zip(*[d.at(times).altaz() for d in difference])
     alt = np.array([a._degrees for a in alt])
     az = np.array([a._degrees for a in az])
     distance = np.array([a.km for a in distance])
-    return atl, az, distance
+    return alt, az, distance
 
 
 def MWA_response(alt, az=0):
@@ -111,7 +150,7 @@ def MWA_response(alt, az=0):
     returns
     -------
     gain : float
-        Gain of the telescope, normalised to 1 at zenith
+        Gain of the telescope, normalised to 1
     """
     # TODO: look up values based on the MWA primary beam (empirical or full_EE)
     ZA = 90 - np.clip(alt,0, 90)
@@ -192,4 +231,41 @@ def power(site, t_distance, r_distance, t_elevation, r_elevation, RCS=1):
 
 
 if __name__ == "__main__":
-    pass
+    print("build satellites")
+    satellites = get_sats(kind='starlink')
+    print(f'found {len(satellites)} satellites')
+    with open('sat_names.txt','w') as out:
+        for s in satellites:
+            print(f'{s.name}', file=out)
+
+    print("build ground stations")
+    bc = get_broadcast_locations()
+    bc = bc[bc['STATE']=='WA']
+    transmitters = [Topos(longitude_degrees=i, latitude_degrees=j) for (i,j) in bc['LONGITUDE','LATITUDE']]
+    print(f'created {len(transmitters)} transmitters')
+    with open('tx_names.txt','w') as out:
+        for tx in bc:
+            print(f'{tx["NAME"]}', file=out)
+
+    print("set up time step")
+    t = get_time_rage(duration=3600, step_size=10)
+
+    print("Pre-compute satellite locations from MWA")
+    MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
+    np.save('MWA_alt.npy',MWA_alt)
+    np.save('MWA_az.npy', MWA_az)
+    np.save('MWA_dist.npy', MWA_dist)
+    #print("choose satellites that are above the horizon for the MWA at some pointing")
+    #sat_mask = np.any(MWA_alt>0, axis=1)
+    #visible = satellites[sat_mask]
+
+    print("Compute powers") 
+    P = np.zeros(shape=(len(transmitters), len(satellites), len(t)))
+    for i, gnd in enumerate(transmitters):
+        print(f'station [{i}/{len(transmitters)}] {bc[i]["NAME"]}')
+        alt, az, dist = alt_az_dist(gnd, satellites, t)
+        # alt.shape = (len(satellites), len(t))
+        P[i,:,:] = power(bc[i], dist, MWA_dist, alt, MWA_alt)[1]
+        # power[0].shape == alt.shape == MWA_alt.shape == (len(satellites, len(t)))
+    np.save('power.npy', P)
+
