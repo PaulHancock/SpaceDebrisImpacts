@@ -246,9 +246,14 @@ if __name__ == "__main__":
     with open('tx_names.txt','w') as out:
         for tx in bc:
             print(f'{tx["NAME"]}', file=out)
+    freqs = np.array(bc['FREQUENCY'])
+    np.save('tx_freqs.npy', freqs)
 
     print("set up time step")
     t = get_time_rage(duration=3600, step_size=10)
+    with open('times.txt', 'w') as out:
+        for time in t:
+            print(f'{time}', file=out)
 
     print("Pre-compute satellite locations from MWA")
     MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
