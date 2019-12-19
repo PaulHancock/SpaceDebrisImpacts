@@ -157,7 +157,7 @@ def MWA_response(alt, az=0):
     return np.cos(np.radians(ZA))**2
 
 
-def transmitter_response(alt, n=6, spacing=3, tilt=5):
+def transmitter_response(alt, n=6, spacing=3, tilt=0):
     """
     Short cut all the Jones matrix calcs and give a direct solution
 
@@ -238,9 +238,24 @@ if __name__ == "__main__":
         for s in satellites:
             print(f'{s.name}', file=out)
 
-    print("build ground stations")
+    print("set up time step")
+    now = datetime.datetime(2019, 11, 6, 12, 37, 37, 0)
+    now = now.replace(tzinfo=utc)
+    t = get_time_rage(start=now, duration=3600, step_size=10)
+    with open('times.txt', 'w') as out:
+        for time in t:
+            print(time.utc_datetime(), file=out)
+
+    print("Pre-compute satellite locations from MWA")
+    MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
+    np.save('MWA_alt.npy',MWA_alt)
+    np.save('MWA_az.npy', MWA_az)
+    np.save('MWA_dist.npy', MWA_dist)
+
+    print("load ground stations")
     bc = get_broadcast_locations()
     bc = bc[bc['STATE']=='WA']
+    print("convert to Topos")
     transmitters = [Topos(longitude_degrees=i, latitude_degrees=j) for (i,j) in bc['LONGITUDE','LATITUDE']]
     print(f'created {len(transmitters)} transmitters')
     with open('tx_names.txt','w') as out:
@@ -248,21 +263,6 @@ if __name__ == "__main__":
             print(f'{tx["NAME"]}', file=out)
     freqs = np.array(bc['FREQUENCY'])
     np.save('tx_freqs.npy', freqs)
-
-    print("set up time step")
-    t = get_time_rage(duration=3600, step_size=10)
-    with open('times.txt', 'w') as out:
-        for time in t:
-            print(f'{time}', file=out)
-
-    print("Pre-compute satellite locations from MWA")
-    MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
-    np.save('MWA_alt.npy',MWA_alt)
-    np.save('MWA_az.npy', MWA_az)
-    np.save('MWA_dist.npy', MWA_dist)
-    #print("choose satellites that are above the horizon for the MWA at some pointing")
-    #sat_mask = np.any(MWA_alt>0, axis=1)
-    #visible = satellites[sat_mask]
 
     print("Compute powers") 
     P = np.zeros(shape=(len(transmitters), len(satellites), len(t)))
