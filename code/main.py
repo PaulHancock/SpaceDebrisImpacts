@@ -2,6 +2,7 @@
 
 from __future__ import print_function, division
 
+import os
 import astropy
 from astropy.table import Table
 import numpy as np
@@ -35,12 +36,10 @@ def get_sats(kind='stations', key_type='str'):
     -------
     sats : [:class:`skyfield.sgp4lib.EarthSatellite`,...]
     """
-    if kind == 'stations':
-        url = 'http://www.celestrak.com/NORAD/elements/stations.txt'
-    elif kind == 'starlink':
-        url = 'http://www.celestrak.com/NORAD/elements/starlink.txt'
-    else:
-        url = 'http://www.celestrak.com/NORAD/elements/geo.txt'
+    if kind is None:
+        kind = 'stations'
+    url = f'http://www.celestrak.com/NORAD/elements/{kind}.txt'
+
     satellites = load.tle(url)
 
     if key_type =='str':
@@ -231,46 +230,56 @@ def power(site, t_distance, r_distance, t_elevation, r_elevation, RCS=1):
 
 
 if __name__ == "__main__":
-    print("build satellites")
-    satellites = get_sats(kind='starlink')
-    print(f'found {len(satellites)} satellites')
-    with open('sat_names.txt','w') as out:
-        for s in satellites:
-            print(f'{s.name}', file=out)
-
-    print("set up time step")
+    print("Set up times")
     now = datetime.datetime(2019, 11, 6, 12, 37, 37, 0)
     now = now.replace(tzinfo=utc)
     t = get_time_rage(start=now, duration=3600, step_size=10)
-    with open('times.txt', 'w') as out:
-        for time in t:
-            print(time.utc_datetime(), file=out)
 
-    print("Pre-compute satellite locations from MWA")
-    MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
-    np.save('MWA_alt.npy',MWA_alt)
-    np.save('MWA_az.npy', MWA_az)
-    np.save('MWA_dist.npy', MWA_dist)
-
-    print("load ground stations")
-    bc = get_broadcast_locations()
-    bc = bc[bc['STATE']=='WA']
-    print("convert to Topos")
+    print("Load ground stations")
+    bc = get_broadcast_locations()#freq_min=72e6, freq_max=103e6)
+    #bc = bc[bc['STATE']=='WA']
+    print(" - convert to Topos")
     transmitters = [Topos(longitude_degrees=i, latitude_degrees=j) for (i,j) in bc['LONGITUDE','LATITUDE']]
     print(f'created {len(transmitters)} transmitters')
-    with open('tx_names.txt','w') as out:
-        for tx in bc:
-            print(f'{tx["NAME"]}', file=out)
     freqs = np.array(bc['FREQUENCY'])
-    np.save('tx_freqs.npy', freqs)
 
-    print("Compute powers") 
-    P = np.zeros(shape=(len(transmitters), len(satellites), len(t)))
-    for i, gnd in enumerate(transmitters):
-        print(f'station [{i}/{len(transmitters)}] {bc[i]["NAME"]}')
-        alt, az, dist = alt_az_dist(gnd, satellites, t)
-        # alt.shape = (len(satellites), len(t))
-        P[i,:,:] = power(bc[i], dist, MWA_dist, alt, MWA_alt)[1]
-        # power[0].shape == alt.shape == MWA_alt.shape == (len(satellites, len(t)))
-    np.save('power.npy', P)
+    for k in ['stations', 'starlink', 'geo', 'noaa', 'weather','science','cubesat']:
+        base = f'data/results/{k}'
+        if not os.path.exists(base):
+            os.mkdir(base)
+        print(f"== GROUP {k} ===")
+        print(" - build satellites")
+        satellites = get_sats(kind=k)
+        print(f'found {len(satellites)} satellites')
+        with open(f'{base}/sat_names.txt','w') as out:
+            for s in satellites:
+                print(f'{s.name}', file=out)
+
+        print(' - write times')
+        with open(f'{base}/times.txt', 'w') as out:
+            for time in t:
+                print(time.utc_datetime(), file=out)
+
+        print(" - compute satellite locations from MWA")
+        MWA_alt, MWA_az, MWA_dist = alt_az_dist(MWA, satellites, t)
+        np.save(f'{base}/MWA_alt.npy',MWA_alt)
+        np.save(f'{base}/MWA_az.npy', MWA_az)
+        np.save(f'{base}/MWA_dist.npy', MWA_dist)
+
+        print(" - write ground stations")
+        with open(f'{base}/tx_names.txt','w') as out:
+            for tx in bc:
+                print(f'{tx["NAME"]}', file=out)
+        print(" - write freqs")
+        np.save(f'{base}/tx_freqs.npy', freqs)
+
+        print(" - compute powers")
+        P = np.zeros(shape=(len(transmitters), len(satellites), len(t)))
+        for i, gnd in enumerate(transmitters):
+            #print(f'station [{i}/{len(transmitters)}] {bc[i]["NAME"]}')
+            alt, az, dist = alt_az_dist(gnd, satellites, t)
+            # alt.shape = (len(satellites), len(t))
+            P[i,:,:] = power(bc[i], dist, MWA_dist, alt, MWA_alt)[1]
+            # power[0].shape == alt.shape == MWA_alt.shape == (len(satellites, len(t)))
+        np.save(f'{base}/power.npy', P)
 
